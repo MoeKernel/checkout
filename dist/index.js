@@ -2112,7 +2112,8 @@ function testRef(git, ref, commit) {
         // refs/tags/
         else if (upperRef.startsWith('REFS/TAGS/')) {
             const tagName = ref.substring('refs/tags/'.length);
-            return ((yield git.tagExists(tagName)) && commit === (yield git.revParse(ref)));
+            return ((yield git.tagExists(tagName)) &&
+                commit === (yield git.revParse(`${ref}^{commit}`)));
         }
         // Unexpected
         else {
