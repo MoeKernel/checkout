@@ -2448,8 +2448,7 @@ function getFetchUrl(settings) {
         const user = settings.sshUser.length > 0 ? settings.sshUser : 'git';
         return `${user}@${serviceUrl.hostname}:${encodedOwner}/${encodedName}.git`;
     }
-    // "origin" is SCHEME://HOSTNAME[:PORT]
-    return `${serviceUrl.origin}/${encodedOwner}/${encodedName}`;
+    return `${serviceUrl}/${encodedOwner}/${encodedName}`;
 }
 exports.getFetchUrl = getFetchUrl;
 function getServerUrl(url) {
