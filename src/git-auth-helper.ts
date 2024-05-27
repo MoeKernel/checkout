@@ -35,14 +35,14 @@ class GitAuthHelper {
   private readonly git: IGitCommandManager
   private readonly settings: IGitSourceSettings
   private readonly tokenConfigKey: string
-  private readonly tokenConfigValue: string
-  private readonly tokenPlaceholderConfigValue: string
+  private readonly tokenCredential: string
   private readonly insteadOfKey: string
   private readonly insteadOfValues: string[] = []
   private sshCommand = ''
   private sshKeyPath = ''
   private sshKnownHostsPath = ''
   private temporaryHomePath = ''
+  private credentialStorePath = ''
 
   constructor(
     gitCommandManager: IGitCommandManager,
@@ -53,14 +53,10 @@ class GitAuthHelper {
 
     // Token auth header
     const serverUrl = urlHelper.getServerUrl(this.settings.githubServerUrl)
-    this.tokenConfigKey = `http.${serverUrl.origin}/.extraheader` // "origin" is SCHEME://HOSTNAME[:PORT]
-    const basicCredential = Buffer.from(
-      `x-access-token:${this.settings.authToken}`,
-      'utf8'
-    ).toString('base64')
-    core.setSecret(basicCredential)
-    this.tokenPlaceholderConfigValue = `AUTHORIZATION: basic ***`
-    this.tokenConfigValue = `AUTHORIZATION: basic ${basicCredential}`
+    this.tokenConfigKey = `credential.${serverUrl.origin}/.helper` // "origin" is SCHEME://HOSTNAME[:PORT]
+    serverUrl.username = `x-access-token`
+    serverUrl.password = this.settings.authToken
+    this.tokenCredential = serverUrl.href
 
     // Instead of SSH URL
     this.insteadOfKey = `url.${serverUrl.origin}/.insteadOf` // "origin" is SCHEME://HOSTNAME[:PORT]
@@ -78,6 +74,7 @@ class GitAuthHelper {
 
     // Configure new values
     await this.configureSsh()
+    await this.writeTokenCredential()
     await this.configureToken()
   }
 
@@ -158,17 +155,9 @@ class GitAuthHelper {
       // refer to https://docs.microsoft.com/en-us/windows-server/identity/ad-ds/manage/component-updates/command-line-process-auditing
       const output = await this.git.submoduleForeach(
         // wrap the pipeline in quotes to make sure it's handled properly by submoduleForeach, rather than just the first part of the pipeline
-        `sh -c "git config --local '${this.tokenConfigKey}' '${this.tokenPlaceholderConfigValue}' && git config --local --show-origin --name-only --get-regexp remote.origin.url"`,
+        `sh -c "git config --local '${this.tokenConfigKey}' '"store --file ${this.credentialStorePath}"' && git config --local --show-origin --name-only --get-regexp remote.origin.url"`,
         this.settings.nestedSubmodules
       )
-
-      // Replace the placeholder
-      const configPaths: string[] =
-        output.match(/(?<=(^|\n)file:)[^\t]+(?=\tremote\.origin\.url)/g) || []
-      for (const configPath of configPaths) {
-        core.debug(`Replacing token placeholder in '${configPath}'`)
-        await this.replaceTokenPlaceholder(configPath)
-      }
 
       if (this.settings.sshKey) {
         // Configure core.sshCommand
@@ -292,30 +281,17 @@ class GitAuthHelper {
     // refer to https://docs.microsoft.com/en-us/windows-server/identity/ad-ds/manage/component-updates/command-line-process-auditing
     await this.git.config(
       this.tokenConfigKey,
-      this.tokenPlaceholderConfigValue,
+      `"store --file ${this.credentialStorePath}"`,
       globalConfig
     )
-
-    // Replace the placeholder
-    await this.replaceTokenPlaceholder(configPath || '')
   }
 
-  private async replaceTokenPlaceholder(configPath: string): Promise<void> {
-    assert.ok(configPath, 'configPath is not defined')
-    let content = (await fs.promises.readFile(configPath)).toString()
-    const placeholderIndex = content.indexOf(this.tokenPlaceholderConfigValue)
-    if (
-      placeholderIndex < 0 ||
-      placeholderIndex != content.lastIndexOf(this.tokenPlaceholderConfigValue)
-    ) {
-      throw new Error(`Unable to replace auth placeholder in ${configPath}`)
-    }
-    assert.ok(this.tokenConfigValue, 'tokenConfigValue is not defined')
-    content = content.replace(
-      this.tokenPlaceholderConfigValue,
-      this.tokenConfigValue
-    )
-    await fs.promises.writeFile(configPath, content)
+  private async writeTokenCredential(): Promise<void> {
+    const runnerTemp = process.env['RUNNER_TEMP'] || ''
+    assert.ok(runnerTemp, 'RUNNER_TEMP is not defined')
+    const uniqueId = uuid()
+    this.credentialStorePath = path.join(runnerTemp, uniqueId)
+    await fs.promises.writeFile(this.credentialStorePath, this.tokenCredential)
   }
 
   private async removeSsh(): Promise<void> {
