@@ -164,15 +164,15 @@ class GitAuthHelper {
         this.sshKeyPath = '';
         this.sshKnownHostsPath = '';
         this.temporaryHomePath = '';
+        this.credentialStorePath = '';
         this.git = gitCommandManager;
         this.settings = gitSourceSettings || {};
         // Token auth header
         const serverUrl = urlHelper.getServerUrl(this.settings.githubServerUrl);
-        this.tokenConfigKey = `http.${serverUrl.origin}/.extraheader`; // "origin" is SCHEME://HOSTNAME[:PORT]
-        const basicCredential = Buffer.from(`x-access-token:${this.settings.authToken}`, 'utf8').toString('base64');
-        core.setSecret(basicCredential);
-        this.tokenPlaceholderConfigValue = `AUTHORIZATION: basic ***`;
-        this.tokenConfigValue = `AUTHORIZATION: basic ${basicCredential}`;
+        this.tokenConfigKey = `credential.${serverUrl.origin}/.helper`; // "origin" is SCHEME://HOSTNAME[:PORT]
+        serverUrl.username = `git`;
+        serverUrl.password = this.settings.authToken;
+        this.tokenCredential = serverUrl.href;
         // Instead of SSH URL
         this.insteadOfKey = `url.${serverUrl.origin}/.insteadOf`; // "origin" is SCHEME://HOSTNAME[:PORT]
         this.insteadOfValues.push(`git@${serverUrl.hostname}:`);
@@ -186,6 +186,7 @@ class GitAuthHelper {
             yield this.removeAuth();
             // Configure new values
             yield this.configureSsh();
+            yield this.writeTokenCredential();
             yield this.configureToken();
         });
     }
@@ -261,13 +262,7 @@ class GitAuthHelper {
                 // refer to https://docs.microsoft.com/en-us/windows-server/identity/ad-ds/manage/component-updates/command-line-process-auditing
                 const output = yield this.git.submoduleForeach(
                 // wrap the pipeline in quotes to make sure it's handled properly by submoduleForeach, rather than just the first part of the pipeline
-                `sh -c "git config --local '${this.tokenConfigKey}' '${this.tokenPlaceholderConfigValue}' && git config --local --show-origin --name-only --get-regexp remote.origin.url"`, this.settings.nestedSubmodules);
-                // Replace the placeholder
-                const configPaths = output.match(/(?<=(^|\n)file:)[^\t]+(?=\tremote\.origin\.url)/g) || [];
-                for (const configPath of configPaths) {
-                    core.debug(`Replacing token placeholder in '${configPath}'`);
-                    yield this.replaceTokenPlaceholder(configPath);
-                }
+                `sh -c "git config --local '${this.tokenConfigKey}' '"store --file ${this.credentialStorePath}"' && git config --local --show-origin --name-only --get-regexp remote.origin.url"`, this.settings.nestedSubmodules);
                 if (this.settings.sshKey) {
                     // Configure core.sshCommand
                     yield this.git.submoduleForeach(`git config --local '${SSH_COMMAND_KEY}' '${this.sshCommand}'`, this.settings.nestedSubmodules);
@@ -361,26 +356,16 @@ class GitAuthHelper {
             if (!configPath && !globalConfig) {
                 configPath = path.join(this.git.getWorkingDirectory(), '.git', 'config');
             }
-            // Configure a placeholder value. This approach avoids the credential being captured
-            // by process creation audit events, which are commonly logged. For more information,
-            // refer to https://docs.microsoft.com/en-us/windows-server/identity/ad-ds/manage/component-updates/command-line-process-auditing
-            yield this.git.config(this.tokenConfigKey, this.tokenPlaceholderConfigValue, globalConfig);
-            // Replace the placeholder
-            yield this.replaceTokenPlaceholder(configPath || '');
+            yield this.git.config(this.tokenConfigKey, `"store --file ${this.credentialStorePath}"`, globalConfig);
         });
     }
-    replaceTokenPlaceholder(configPath) {
+    writeTokenCredential() {
         return __awaiter(this, void 0, void 0, function* () {
-            assert.ok(configPath, 'configPath is not defined');
-            let content = (yield fs.promises.readFile(configPath)).toString();
-            const placeholderIndex = content.indexOf(this.tokenPlaceholderConfigValue);
-            if (placeholderIndex < 0 ||
-                placeholderIndex != content.lastIndexOf(this.tokenPlaceholderConfigValue)) {
-                throw new Error(`Unable to replace auth placeholder in ${configPath}`);
-            }
-            assert.ok(this.tokenConfigValue, 'tokenConfigValue is not defined');
-            content = content.replace(this.tokenPlaceholderConfigValue, this.tokenConfigValue);
-            yield fs.promises.writeFile(configPath, content);
+            const runnerTemp = process.env['RUNNER_TEMP'] || '';
+            assert.ok(runnerTemp, 'RUNNER_TEMP is not defined');
+            const uniqueId = (0, uuid_1.v4)();
+            this.credentialStorePath = path.join(runnerTemp, uniqueId);
+            yield fs.promises.writeFile(this.credentialStorePath, this.tokenCredential);
         });
     }
     removeSsh() {
@@ -886,24 +871,20 @@ class GitCommandManager {
             for (const key of Object.keys(this.gitEnv)) {
                 env[key] = this.gitEnv[key];
             }
-            const defaultListener = {
-                stdout: (data) => {
-                    stdout.push(data.toString());
-                }
-            };
-            const mergedListeners = Object.assign(Object.assign({}, defaultListener), customListeners);
-            const stdout = [];
             const options = {
                 cwd: this.workingDirectory,
                 env,
                 silent,
                 ignoreReturnCode: allowAllExitCodes,
-                listeners: mergedListeners
+                listeners: customListeners
             };
-            result.exitCode = yield exec.exec(`"${this.gitPath}"`, args, options);
-            result.stdout = stdout.join('');
+            let execOutput = yield exec.getExecOutput(`"${this.gitPath}"`, args, options);
+            result.exitCode = execOutput.exitCode;
+            result.stdout = execOutput.stdout;
+            result.stderr = execOutput.stderr;
             core.debug(result.exitCode.toString());
             core.debug(result.stdout);
+            core.debug(result.stderr);
             return result;
         });
     }
@@ -975,6 +956,7 @@ class GitCommandManager {
 class GitOutput {
     constructor() {
         this.stdout = '';
+        this.stderr = '';
         this.exitCode = 0;
     }
 }
