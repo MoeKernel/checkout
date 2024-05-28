@@ -356,9 +356,6 @@ class GitAuthHelper {
             if (!configPath && !globalConfig) {
                 configPath = path.join(this.git.getWorkingDirectory(), '.git', 'config');
             }
-            // Configure a placeholder value. This approach avoids the credential being captured
-            // by process creation audit events, which are commonly logged. For more information,
-            // refer to https://docs.microsoft.com/en-us/windows-server/identity/ad-ds/manage/component-updates/command-line-process-auditing
             yield this.git.config(this.tokenConfigKey, `"store --file ${this.credentialStorePath}"`, globalConfig);
         });
     }
@@ -874,24 +871,20 @@ class GitCommandManager {
             for (const key of Object.keys(this.gitEnv)) {
                 env[key] = this.gitEnv[key];
             }
-            const defaultListener = {
-                stdout: (data) => {
-                    stdout.push(data.toString());
-                }
-            };
-            const mergedListeners = Object.assign(Object.assign({}, defaultListener), customListeners);
-            const stdout = [];
             const options = {
                 cwd: this.workingDirectory,
                 env,
                 silent,
                 ignoreReturnCode: allowAllExitCodes,
-                listeners: mergedListeners
+                listeners: customListeners
             };
-            result.exitCode = yield exec.exec(`"${this.gitPath}"`, args, options);
-            result.stdout = stdout.join('');
+            let execOutput = yield exec.getExecOutput(`"${this.gitPath}"`, args, options);
+            result.exitCode = execOutput.exitCode;
+            result.stdout = execOutput.stdout;
+            result.stderr = execOutput.stderr;
             core.debug(result.exitCode.toString());
             core.debug(result.stdout);
+            core.debug(result.stderr);
             return result;
         });
     }
@@ -963,6 +956,7 @@ class GitCommandManager {
 class GitOutput {
     constructor() {
         this.stdout = '';
+        this.stderr = '';
         this.exitCode = 0;
     }
 }

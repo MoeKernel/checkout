@@ -522,28 +522,22 @@ class GitCommandManager {
       env[key] = this.gitEnv[key]
     }
 
-    const defaultListener = {
-      stdout: (data: Buffer) => {
-        stdout.push(data.toString())
-      }
-    }
-
-    const mergedListeners = {...defaultListener, ...customListeners}
-
-    const stdout: string[] = []
     const options = {
       cwd: this.workingDirectory,
       env,
       silent,
       ignoreReturnCode: allowAllExitCodes,
-      listeners: mergedListeners
+      listeners: customListeners
     }
 
-    result.exitCode = await exec.exec(`"${this.gitPath}"`, args, options)
-    result.stdout = stdout.join('')
+    let execOutput = await exec.getExecOutput(`"${this.gitPath}"`, args, options)
+    result.exitCode = execOutput.exitCode
+    result.stdout = execOutput.stdout
+    result.stderr = execOutput.stderr
 
     core.debug(result.exitCode.toString())
     core.debug(result.stdout)
+    core.debug(result.stderr)
 
     return result
   }
@@ -631,5 +625,6 @@ class GitCommandManager {
 
 class GitOutput {
   stdout = ''
+  stderr = ''
   exitCode = 0
 }

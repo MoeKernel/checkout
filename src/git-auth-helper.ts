@@ -276,9 +276,6 @@ class GitAuthHelper {
       configPath = path.join(this.git.getWorkingDirectory(), '.git', 'config')
     }
 
-    // Configure a placeholder value. This approach avoids the credential being captured
-    // by process creation audit events, which are commonly logged. For more information,
-    // refer to https://docs.microsoft.com/en-us/windows-server/identity/ad-ds/manage/component-updates/command-line-process-auditing
     await this.git.config(
       this.tokenConfigKey,
       `"store --file ${this.credentialStorePath}"`,
